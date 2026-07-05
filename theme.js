@@ -76,9 +76,23 @@ function initMermaidTheme(){
    ([..]) start/end, [..] process, [/../] input, [\..\] display,
    {..} decision, ((..)) connector.
 --------------------------------------------------------------- */
+// Replaces the CONTENTS of every double-quoted label (keeping the quotes
+// themselves, and keeping the string the same length) with underscores.
+// Used ONLY to build a scratch copy for the id-detection regexes below —
+// square brackets that show up INSIDE a node's own label text (e.g. a
+// grouped node whose label literally contains "text_rows[0] = ...") would
+// otherwise get misread as the `id[...]` "process" shape syntax, which
+// only ever legitimately appears OUTSIDE quotes in a real node definition.
+// Without this, a label containing bracket text could inject a bogus
+// `class text_rows ffProcess` line and add a phantom disconnected node.
+function maskQuotedForShapeScan(src){
+  return src.replace(/"(?:[^"\\]|\\.)*"/g, m => '"' + '_'.repeat(Math.max(0, m.length - 2)) + '"');
+}
+
 function applyShapeColors(src){
   if(!/^\s*(flowchart|graph)\b/i.test(src)) return src;
 
+  const scan = maskQuotedForShapeScan(src);
   const used = new Set();
   const groups = { startEnd:[], process:[], input:[], display:[], decision:[], connector:[],
                     preparation:[], subroutine:[], document:[], database:[] };
@@ -86,7 +100,7 @@ function applyShapeColors(src){
   const collect = (regex, bucket) => {
     let m;
     const re = new RegExp(regex, 'g');
-    while((m = re.exec(src)) !== null){
+    while((m = re.exec(scan)) !== null){
       const id = m[1];
       if(used.has(id)) continue;
       used.add(id);

@@ -90,6 +90,55 @@ function createParser(){
     return id;
   }
 
+  // Builds a node whose label has ALREADY been fully sanitized/escaped by
+  // the caller (see buildGroupLabel below) — used for merged/grouped nodes
+  // whose multi-line label would otherwise get mangled or chopped off by
+  // sanitizeLabel's whitespace-collapsing + 70-char single-line truncation,
+  // both of which are correct for a normal one-statement node but wrong for
+  // a deliberately-longer grouped one.
+  function newNodeRaw(shape, rawLabel){
+    const id = 'n' + (nodeCounter++);
+    let def;
+    if(shape === 'start' || shape === 'end') def = `${id}(["${rawLabel}"])`;
+    else if(shape === 'decision') def = `${id}{"${rawLabel}"}`;
+    else if(SHAPE_MAP[shape]) def = `${id}@{ shape: ${SHAPE_MAP[shape]}, label: "${rawLabel}" }`;
+    else def = `${id}["${rawLabel}"]`;
+    nodeDefs.push(def);
+    return id;
+  }
+
+  // Sanitizes ONE line of a grouped label: same quote/backslash escaping as
+  // sanitizeLabel, but with its own (shorter) per-line length cap, since a
+  // grouped node shows several of these stacked on top of each other and a
+  // 70-char cap per line would blow the box way too wide.
+  function sanitizeLabelLine(text, maxLen){
+    let raw = String(text).replace(/\s+/g,' ').trim();
+    if(raw.length > maxLen) raw = raw.slice(0, Math.max(0,maxLen-3)) + '...';
+    return (raw.replace(/\\/g, '\\\\').replace(/"/g, "'")) || ' ';
+  }
+
+  // Joins a title + a capped number of item lines into one <br/>-separated
+  // label for a grouped node (e.g. several consecutive variable declarations,
+  // or several consecutive assignments into the same array, collapsed into
+  // ONE box instead of one box per line — mirroring how a hand-drawn
+  // flowchart usually shows a whole "Declare" or "Set arr[]" block as a
+  // single step). Caps both line count and line length so a long run of
+  // statements still produces a bounded-size box rather than an ever-taller
+  // one.
+  function buildGroupLabel(title, items, opts){
+    opts = opts || {};
+    const maxLines = opts.maxLines || 10;
+    const maxLineLen = opts.maxLineLen || 48;
+    const shown = items.slice(0, maxLines).map(t =>
+      sanitizeLabelLine(String(t).replace(/;\s*$/, ''), maxLineLen)
+    );
+    const lines = title ? [sanitizeLabelLine(title, maxLineLen), ...shown] : shown;
+    if(items.length > maxLines){
+      lines.push(`... (+${items.length - maxLines} รายการ)`);
+    }
+    return lines.join('<br/>');
+  }
+
   // Connector labels cycle A, B, C ... Z, A2, B2, ... to keep circles short.
   function nextConnectorLabel(){
     const n = connectorCounter++;
@@ -380,6 +429,87 @@ function createParser(){
     return null;
   }
 
+  /* ---------------------------------------------------------------
+     DECLARATION GROUPING — collapses a run of consecutive variable
+     declarations into ONE box instead of one box per line, matching how
+     hand-drawn flowcharts usually show a whole "Declare ..." block as a
+     single step (see reference image: WIDTH/HEIGHT/PI/... all declared
+     together in one node). Heuristic: strips common storage/access
+     modifiers, then checks whether what's left starts with a recognized
+     type keyword.
+  --------------------------------------------------------------- */
+  const DECL_MODIFIER_RE = /^(?:static|final|readonly|volatile|public|private|protected)\s+/i;
+  const DECL_TYPE_KEYWORDS = [
+    'int','long','short','unsigned','signed','float','double','char','bool','boolean',
+    'byte','string','String','var','let','const','auto','size_t','wchar_t',
+    'uint8_t','uint16_t','uint32_t','uint64_t','int8_t','int16_t','int32_t','int64_t'
+  ];
+  const DECL_TYPE_RE = new RegExp('^(?:' + DECL_TYPE_KEYWORDS.join('|') + ')\\b');
+
+  function isDeclarationLike(text){
+    let t = text.trim();
+    let prev;
+    do { prev = t; t = t.replace(DECL_MODIFIER_RE, ''); } while(t !== prev);
+    return DECL_TYPE_RE.test(t);
+  }
+
+  // Collapses consecutive 'simple' statements that all look like variable
+  // declarations into a single { type:'declgroup', items:[...] } entry.
+  // Runs of length 1 are left untouched (grouping a single line into its
+  // own "group" box would just add a redundant title with no benefit).
+  function groupConsecutiveDeclarations(stmts){
+    const merged = [];
+    let run = [];
+    const flush = () => {
+      if(run.length === 0) return;
+      if(run.length === 1) merged.push(run[0]);
+      else merged.push({ type:'declgroup', items: run.map(s => s.text) });
+      run = [];
+    };
+    for(const s of stmts){
+      if(s.type === 'simple' && isDeclarationLike(s.text)){
+        run.push(s);
+      } else {
+        flush();
+        merged.push(s);
+      }
+    }
+    flush();
+    return merged;
+  }
+
+  /* ---------------------------------------------------------------
+     ARRAY-ASSIGNMENT GROUPING — collapses a run of consecutive assignments
+     into the SAME array (arr[0] = ...; arr[1] = ...; ...) into a single
+     "Set arr (N items)" box, matching the reference image's
+     "Set text_rows (5 items)" node.
+  --------------------------------------------------------------- */
+  const ARRAY_ASSIGN_RE = /^\s*([A-Za-z_]\w*)\s*\[/;
+
+  function groupConsecutiveArrayAssigns(stmts){
+    const merged = [];
+    let run = [];
+    let runName = null;
+    const flush = () => {
+      if(run.length === 0) return;
+      if(run.length === 1) merged.push(run[0]);
+      else merged.push({ type:'arraygroup', name: runName, items: run.map(s => s.text) });
+      run = []; runName = null;
+    };
+    for(const s of stmts){
+      const m = s.type === 'simple' ? s.text.match(ARRAY_ASSIGN_RE) : null;
+      if(m && (runName === null || runName === m[1])){
+        runName = m[1];
+        run.push(s);
+      } else {
+        flush();
+        merged.push(s);
+      }
+    }
+    flush();
+    return merged;
+  }
+
   // Walks the parsed statement tree (recursing into every nested body:
   // if/else, loops, switch-cases, try/catch/finally) applying, in order:
   //  1) system-call hiding — matching statements are dropped entirely
@@ -389,6 +519,8 @@ function createParser(){
   function postProcessStmts(stmts, opts){
     const hideSystem = !!opts.hideSystem;
     const groupOutputs = !!opts.groupOutputs;
+    const groupDeclarations = !!opts.groupDeclarations;
+    const groupArrayAssigns = !!opts.groupArrayAssigns;
 
     // Recurse first so nested blocks are cleaned up too.
     for(const s of stmts){
@@ -405,6 +537,16 @@ function createParser(){
     if(hideSystem){
       out = out.filter(s => !((s.type === 'simple' || s.type === 'subroutine') && isSystemCall(s.text)));
     }
+
+    // Order matters here: array-assignment runs and declaration runs are
+    // mutually exclusive by construction (isDeclarationLike only matches
+    // text starting with a type keyword, ARRAY_ASSIGN_RE only matches text
+    // starting with `name[`), so either order produces the same result —
+    // but both must run BEFORE groupOutputs, since they change some 'simple'
+    // entries into 'declgroup'/'arraygroup' entries that groupOutputs'
+    // "cur.type === 'simple'" check intentionally no longer matches.
+    if(groupArrayAssigns) out = groupConsecutiveArrayAssigns(out);
+    if(groupDeclarations) out = groupConsecutiveDeclarations(out);
 
     if(groupOutputs){
       const merged = [];
@@ -672,6 +814,19 @@ function createParser(){
         connect(entryExits, id);
         return [{ from:id }];
       }
+      case 'declgroup': {
+        const label = buildGroupLabel('ประกาศตัวแปร', stmt.items, { maxLines:12, maxLineLen:50 });
+        const id = newNodeRaw('process', label);
+        connect(entryExits, id);
+        return [{ from:id }];
+      }
+      case 'arraygroup': {
+        const title = `กำหนดค่า ${stmt.name} (${stmt.items.length} รายการ)`;
+        const label = buildGroupLabel(title, stmt.items, { maxLines:10, maxLineLen:50 });
+        const id = newNodeRaw('process', label);
+        connect(entryExits, id);
+        return [{ from:id }];
+      }
       case 'input': {
         const id = newNode('input', extractInputLabel(stmt.text));
         connect(entryExits, id);
@@ -864,7 +1019,7 @@ function createParser(){
   // convertible (e.g. an empty function), so callers can skip it.
   function convertOneFunctionBody(bodyOrig, bodyMasked, bodyOffset, startLabel){
     let stmts = parseStatements(bodyOrig, bodyMasked, bodyOffset);
-    stmts = postProcessStmts(stmts, { hideSystem: true, groupOutputs: true });
+    stmts = postProcessStmts(stmts, { hideSystem: true, groupOutputs: true, groupDeclarations: true, groupArrayAssigns: true });
     if(!stmts.length) return null;
 
     const startId = newNode('start', startLabel);
@@ -930,7 +1085,7 @@ function createParser(){
     // mode === 'main' (default): convert only main() / the first function found.
     const body = extractMainBody(s, masked);
     let stmts = parseStatements(body.orig, body.masked, body.offset);
-    stmts = postProcessStmts(stmts, { hideSystem: true, groupOutputs: true });
+    stmts = postProcessStmts(stmts, { hideSystem: true, groupOutputs: true, groupDeclarations: true, groupArrayAssigns: true });
 
     if(!stmts.length){
       const hint = body.offset != null

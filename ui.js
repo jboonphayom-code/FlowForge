@@ -600,6 +600,17 @@ function convertForeignObjectsToSvgText(svgRoot){
     const height = parseFloat(fo.getAttribute('height')) || 0;
     const holder = fo.querySelector('span, p, div') || fo;
 
+    // Normalize <br> tags into real newline characters BEFORE reading any
+    // text content below. Mermaid renders a `<br/>`-joined label (used by
+    // grouped declaration/array-assignment nodes) as actual <br> elements
+    // inside the foreignObject, but .textContent skips over <br> tags
+    // without inserting a line break — so without this, a multi-line
+    // grouped label would silently collapse onto one line in the exported
+    // PNG even though it displays correctly on screen.
+    Array.from(fo.querySelectorAll('br')).forEach(br=>{
+      br.replaceWith(document.createTextNode('\n'));
+    });
+
     let color = '#ccc';
     let fontWeight = 'normal';
     let fontSize = '16px';
