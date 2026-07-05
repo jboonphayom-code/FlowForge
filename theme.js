@@ -22,7 +22,15 @@ const SHAPE_COLOR_DEFAULTS = {
 let shapeColors = Object.assign({}, SHAPE_COLOR_DEFAULTS);
 
 function getShapeColor(key){
-  const el = document.getElementById('clr' + key[0].toUpperCase() + key.slice(1));
+  const elId = 'clr' + key[0].toUpperCase() + key.slice(1);
+  const el = document.getElementById(elId);
+  if(!el){
+    // Falls back to the in-memory value, but this almost always means a
+    // shape key was added/renamed without adding a matching #clr<Key>
+    // color-input in the HTML — warn loudly instead of failing silently,
+    // since the fallback can mask the bug for a long time otherwise.
+    console.warn(`[theme.js] getShapeColor('${key}'): no #${elId} element found in the DOM; falling back to the in-memory color. Check that the shape key and the color-input id stay in sync.`);
+  }
   return (el && el.value) || shapeColors[key];
 }
 
