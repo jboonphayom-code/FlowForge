@@ -213,6 +213,40 @@ function createParser(){
     };
   }
 
+  // Finds EVERY top-level function-looking block in the source (used by
+  // the "ทั้งหมด" / all-functions conversion mode). Walks left to right
+  // with a fresh copy of FUNC_SIG_RE, and after extracting each function's
+  // body jumps the scan past its closing brace — so a nested function
+  // declared inside another one (legal in JS) is treated as part of its
+  // parent's body rather than pulled out as a second top-level entry.
+  function findAllFunctions(origSrc, maskedSrc){
+    const re = new RegExp(FUNC_SIG_RE.source, 'g');
+    const results = [];
+    let m;
+    while((m = re.exec(maskedSrc)) !== null){
+      const braceIdx = m.index + m[0].length - 1;
+      let depth = 1, j = braceIdx + 1;
+      while(j < maskedSrc.length){
+        if(maskedSrc[j] === '{') depth++;
+        else if(maskedSrc[j] === '}'){ depth--; if(depth === 0) break; }
+        j++;
+      }
+      if(depth !== 0){
+        const e = new Error(`ไม่พบวงเล็บปีกกา "}" ที่ปิดคู่กับฟังก์ชัน "${m[2]}" ให้ตรงกัน (เปิดที่บรรทัดที่ ${lineAt(m.index)}) กรุณาตรวจสอบว่าใส่ปีกกาปิดครบทุกจุดหรือไม่`);
+        e.line = lineAt(m.index);
+        throw e;
+      }
+      results.push({
+        name: m[2],
+        orig: origSrc.slice(braceIdx+1, j),
+        masked: maskedSrc.slice(braceIdx+1, j),
+        offset: braceIdx + 1
+      });
+      re.lastIndex = j + 1; // resume scanning AFTER this function's body
+    }
+    return results;
+  }
+
   function classifyGeneric(text){
     const t = text.trim();
     // Manual Input: any keyboard-entry construct (rendered as a sloped rectangle)
@@ -803,8 +837,10 @@ function createParser(){
     }
   }
 
-  function convertCodeToMermaid(src){
-    nodeCounter = 0; connectorCounter = 0; nodeDefs = []; edgeDefs = []; contextStack = [];
+  // Strips comments/preprocessor lines the same way for both modes, so the
+  // two code paths below only differ in which function body(ies) they pull
+  // out of the cleaned source.
+  function preprocessSource(src){
     // Block comments are blanked out char-by-char rather than with a flat
     // ' '.repeat(m.length): the naive version collapses every newline the
     // comment contained into spaces, which shortens the line count of
@@ -819,8 +855,79 @@ function createParser(){
     s = s.replace(/^\s*using\s+namespace\s+\w+\s*;\s*$/gm, '');
     s = s.replace(/^\s*(import|package)\s+[^\n]*$/gm, '');
     sourceForLines = s;
+    return s;
+  }
 
+  // Converts ONE already-extracted function body (parsed statements) into
+  // its own start...end node/edge chain, appending onto the shared
+  // nodeDefs/edgeDefs arrays. Returns null if the body had nothing
+  // convertible (e.g. an empty function), so callers can skip it.
+  function convertOneFunctionBody(bodyOrig, bodyMasked, bodyOffset, startLabel){
+    let stmts = parseStatements(bodyOrig, bodyMasked, bodyOffset);
+    stmts = postProcessStmts(stmts, { hideSystem: true, groupOutputs: true });
+    if(!stmts.length) return null;
+
+    const startId = newNode('start', startLabel);
+    let exits = processStatements(stmts, [{ from:startId }]);
+    // Every path through the diagram must land on an explicit terminal
+    // node: `return` statements already got their own ("case 'return'"
+    // above), so this only fires for whatever's left over after control
+    // simply falls off the end of the function body without a return —
+    // guaranteeing the flowchart never ends on a dangling arrow.
+    if(exits.length){
+      const endId = newNode('end', endLabel(null));
+      connect(exits, endId);
+    }
+    return true;
+  }
+
+  function convertCodeToMermaid(src, options){
+    options = options || {};
+    const mode = options.mode === 'all' ? 'all' : 'main';
+
+    nodeCounter = 0; connectorCounter = 0; nodeDefs = []; edgeDefs = []; contextStack = [];
+    const s = preprocessSource(src);
     const masked = maskLiterals(s);
+
+    if(mode === 'all'){
+      const funcs = findAllFunctions(s, masked);
+      if(!funcs.length){
+        throw new Error('ไม่พบฟังก์ชันที่แปลงเป็นผังงานได้ ลองตรวจสอบว่าโค้ดมีฟังก์ชันอย่างน้อยหนึ่งฟังก์ชัน');
+      }
+
+      const lines = ['flowchart TD'];
+      let convertedCount = 0;
+      let skippedEmpty = [];
+
+      funcs.forEach((fn, idx) => {
+        // Each function gets its own slice of nodeDefs/edgeDefs so it can
+        // be wrapped in its own `subgraph ... end` block — node IDs still
+        // stay globally unique because nodeCounter/connectorCounter are
+        // NOT reset between functions (only once, above, for the whole run).
+        nodeDefs = []; edgeDefs = [];
+        const ok = convertOneFunctionBody(fn.orig, fn.masked, fn.offset, 'เริ่มต้น: ' + fn.name);
+        if(!ok){ skippedEmpty.push(fn.name); return; }
+        convertedCount++;
+        const subgraphId = 'fn' + idx;
+        lines.push(`    subgraph ${subgraphId}["ฟังก์ชัน: ${sanitizeLabel(fn.name)}"]`);
+        nodeDefs.forEach(d => lines.push('        ' + d));
+        edgeDefs.forEach(e => lines.push('        ' + e));
+        lines.push('    end');
+      });
+
+      if(convertedCount === 0){
+        throw new Error('พบฟังก์ชันในซอร์สโค้ด แต่ทุกฟังก์ชันว่างเปล่าหรือไม่มีคำสั่งที่แปลงเป็นผังงานได้');
+      }
+
+      let warning = null;
+      if(skippedEmpty.length){
+        warning = `ฟังก์ชันต่อไปนี้ไม่มีคำสั่งที่แปลงได้ จึงถูกข้ามไป: ${skippedEmpty.join(', ')}`;
+      }
+
+      return { mermaid: lines.join('\n'), warning };
+    }
+
+    // mode === 'main' (default): convert only main() / the first function found.
     const body = extractMainBody(s, masked);
     let stmts = parseStatements(body.orig, body.masked, body.offset);
     stmts = postProcessStmts(stmts, { hideSystem: true, groupOutputs: true });
@@ -849,12 +956,13 @@ function createParser(){
     edgeDefs.forEach(e => lines.push('    ' + e));
 
     // Warn (rather than silently ignore) when the source has more than one
-    // function-looking block: convertCodeToMermaid only ever converts a
-    // single function (main(), or the first one found), so anything else
-    // in the file was dropped. The UI layer decides how to surface this.
+    // function-looking block: this mode only ever converts a single
+    // function (main(), or the first one found), so anything else in the
+    // file was dropped. The UI layer decides how to surface this — and can
+    // point the user at options.mode:'all' to see every function instead.
     let warning = null;
     if(body.otherFunctions > 0){
-      warning = `พบฟังก์ชันอื่นอีก ${body.otherFunctions} ฟังก์ชันในซอร์สโค้ด ระบบแปลงเป็นผังงานเฉพาะฟังก์ชัน "${body.functionName}" เท่านั้น ฟังก์ชันอื่นจะไม่ถูกแสดงในผังงานนี้`;
+      warning = `พบฟังก์ชันอื่นอีก ${body.otherFunctions} ฟังก์ชันในซอร์สโค้ด ระบบแปลงเป็นผังงานเฉพาะฟังก์ชัน "${body.functionName}" เท่านั้น (เลือกโหมด "ทั้งหมด" เพื่อแปลงทุกฟังก์ชัน)`;
     }
 
     return { mermaid: lines.join('\n'), warning };
@@ -867,9 +975,11 @@ function createParser(){
 // Convenience wrapper preserving the original module API: callers that
 // just want a one-shot conversion don't need to know about createParser()
 // at all. Each call spins up a brand-new isolated instance under the hood.
+// options.mode: 'main' (default) converts only main()/first function found;
+// 'all' converts every top-level function, each in its own subgraph.
 // Returns { mermaid, warning } — see convertCodeToMermaid above.
-function convertCodeToMermaid(src){
-  return createParser().convertCodeToMermaid(src);
+function convertCodeToMermaid(src, options){
+  return createParser().convertCodeToMermaid(src, options);
 }
 
 export { createParser, convertCodeToMermaid };
