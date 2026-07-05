@@ -377,38 +377,39 @@ function applyDirectionIfFlowchart(src){
   const trimmed = src.trim();
   const m = trimmed.match(/^(flowchart|graph)\s+(TD|TB|LR|RL|BT)/i);
   if(!m) return src;
-  if(dir === 'SNAKE') return snakeifyFlowchart(trimmed, m[1]);
+  if(dir === 'USHAPE') return foldIntoUShape(trimmed, m[1]);
   return trimmed.replace(/^(flowchart|graph)\s+(TD|TB|LR|RL|BT)/i, `$1 ${dir}`);
 }
 
-// "งูเลื้อย" layout: instead of one long straight line of boxes, folds the
-// diagram into several horizontal rows stacked top-to-bottom, alternating
-// each row's internal direction LR / RL — so row 1 flows left→right, row 2
-// right→left, row 3 left→right again, etc. This keeps a long linear-ish
-// flowchart from becoming extremely wide (LR) or extremely tall (TD) by
-// trading some of that length for width, snake-style.
+// "รูปตัว U" layout: instead of one long straight column of boxes running
+// top-to-bottom, folds the diagram into vertical columns placed left→right,
+// alternating each column's internal direction TB / BT — column 1 flows
+// top→bottom, column 2 bottom→top, column 3 top→bottom again, etc. With
+// exactly two columns this reads as a single U-turn (down the left side,
+// across, up the right side); longer diagrams get an extra bend per column
+// (U, then W, ...) rather than one ever-taller single line — trading
+// vertical length for horizontal width, capped so it doesn't just keep
+// growing straight down.
 //
-// Implementation: every node/subgraph definition line, in the order it
-// appears in the source, gets bucketed into a "row" (a mermaid subgraph
-// with an explicit `direction LR`/`RL`). Edge lines are left untouched and
-// emitted after all the rows — mermaid/dagre can route an edge across
-// subgraph boundaries just fine, and since the real edges still connect
-// row N's nodes to row N+1's nodes in sequence, dagre naturally stacks the
-// rows in the right top-to-bottom order without needing any invisible
-// helper edges.
+// Implementation mirrors the same idea as a row-based fold, just rotated:
+// every node/subgraph definition line, in source order, gets bucketed into
+// a column (a mermaid subgraph with an explicit `direction TB`/`BT`).
+// Edge lines are left untouched and emitted after all the columns — since
+// the real edges still connect column N's last node to column N+1's first
+// node, dagre naturally places the columns left-to-right in the right
+// order without needing any invisible helper edges.
 //
 // This is a best-effort heuristic, not a true graph-aware layout: it works
 // well for the roughly linear/branching chains this app generates from
 // source code, but a diagram with heavy branch-and-merge structure or
-// loop-back edges may not fold into a *perfectly* clean U/snake shape —
-// it will still render correctly, just without the tidy zigzag in those
-// spots.
-function snakeifyFlowchart(trimmedSrc, keyword){
+// loop-back edges may not fold into a perfectly clean U shape in those
+// spots — it will still render correctly, just without the tidy fold there.
+function foldIntoUShape(trimmedSrc, keyword){
   const lines = trimmedSrc.split('\n');
   const bodyLines = lines.slice(1); // drop the "flowchart TD" / "graph LR" header line
 
-  const rowUnits = [];   // { lines:[...] } — one node def, or one whole subgraph...end block
-  const edgeLines = [];  // "-->" edges, emitted after all rows
+  const colUnits = [];   // { lines:[...] } — one node def, or one whole subgraph...end block
+  const edgeLines = [];  // "-->" edges, emitted after all columns
   const tailLines = [];  // classDef/class/style/click/comments — passed through verbatim at the end
 
   let i = 0;
@@ -419,9 +420,9 @@ function snakeifyFlowchart(trimmedSrc, keyword){
     if(/^%%/.test(t)){ tailLines.push(line); i++; continue; }
     if(/^(classDef|class\s|style\s|click\s|linkStyle)/i.test(t)){ tailLines.push(line); i++; continue; }
     if(/^subgraph\b/i.test(t)){
-      // Capture the whole subgraph...end block as ONE row unit (nested
+      // Capture the whole subgraph...end block as ONE column unit (nested
       // subgraphs, e.g. from "ทุกฟังก์ชัน" mode, aren't split further —
-      // snaking happens at the top level only).
+      // folding happens at the top level only).
       let depth = 1;
       const block = [line];
       i++;
@@ -432,34 +433,38 @@ function snakeifyFlowchart(trimmedSrc, keyword){
         block.push(bodyLines[i]);
         i++;
       }
-      rowUnits.push(block);
+      colUnits.push(block);
       continue;
     }
     if(/-->/.test(t)){ edgeLines.push(line); i++; continue; }
-    rowUnits.push([line]); // plain node definition
+    colUnits.push([line]); // plain node definition
     i++;
   }
 
-  if(rowUnits.length === 0){
+  if(colUnits.length === 0){
     // Nothing to fold (e.g. an edge-only mermaid snippet with implicit node
     // declarations) — fall back to a plain top-down layout instead.
     return trimmedSrc.replace(/^(flowchart|graph)\s+\S+/i, `$1 TD`);
   }
 
-  // Aim for a roughly square grid (~sqrt(N) nodes per row) so the result
-  // reads as a compact snake rather than one giant row or one node per row.
-  const rowSize = Math.max(2, Math.ceil(Math.sqrt(rowUnits.length)));
+  // Default to a true 2-column U (down the left, across, up the right).
+  // Only add more columns/bends once a single column would otherwise get
+  // too tall — trading vertical length for an extra fold instead.
+  const total = colUnits.length;
+  const MAX_COL_HEIGHT = 6;
+  const colCount = Math.max(2, Math.ceil(total / MAX_COL_HEIGHT));
+  const colSize = Math.ceil(total / colCount);
 
-  const out = [`${keyword} TD`];
-  let rowIndex = 0;
-  for(let start = 0; start < rowUnits.length; start += rowSize){
-    const chunk = rowUnits.slice(start, start + rowSize);
-    const rowDir = (rowIndex % 2 === 0) ? 'LR' : 'RL';
-    out.push(`    subgraph snakeRow${rowIndex}[" "]`);
-    out.push(`        direction ${rowDir}`);
+  const out = [`${keyword} LR`];
+  let colIndex = 0;
+  for(let start = 0; start < colUnits.length; start += colSize){
+    const chunk = colUnits.slice(start, start + colSize);
+    const colDir = (colIndex % 2 === 0) ? 'TB' : 'BT';
+    out.push(`    subgraph uCol${colIndex}[" "]`);
+    out.push(`        direction ${colDir}`);
     chunk.forEach(block => block.forEach(l => out.push('        ' + l.trim())));
     out.push('    end');
-    rowIndex++;
+    colIndex++;
   }
   edgeLines.forEach(l => out.push('    ' + l.trim()));
   tailLines.forEach(l => out.push(l));
