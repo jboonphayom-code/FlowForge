@@ -565,6 +565,13 @@ function convertForeignObjectsToSvgText(svgRoot){
   foreignObjects.forEach(fo=>{
     const width = parseFloat(fo.getAttribute('width')) || 0;
     const height = parseFloat(fo.getAttribute('height')) || 0;
+    // The foreignObject isn't anchored at (0,0) inside its parent <g> — Mermaid
+    // positions it with its own x/y offset (e.g. x="-40" y="-10") to center the
+    // label on the node. Without adding that offset back in, the replacement
+    // <text> renders at the group's origin instead of the label's real spot,
+    // which is what made text drift away from its shape in exported PNGs.
+    const offsetX = parseFloat(fo.getAttribute('x')) || 0;
+    const offsetY = parseFloat(fo.getAttribute('y')) || 0;
     const holder = fo.querySelector('span, p, div') || fo;
 
     let color = '#ccc';
@@ -597,11 +604,11 @@ function convertForeignObjectsToSvgText(svgRoot){
 
     const lineHeight = Math.min(height / Math.max(lines.length, 1), 22) || 16;
     const totalH = lineHeight * lines.length;
-    const startY = (height / 2) - (totalH / 2) + (lineHeight * 0.8);
+    const startY = offsetY + (height / 2) - (totalH / 2) + (lineHeight * 0.8);
 
     lines.forEach((line, i)=>{
       const tspan = document.createElementNS(SVG_NS, 'tspan');
-      tspan.setAttribute('x', String(width / 2));
+      tspan.setAttribute('x', String(offsetX + width / 2));
       tspan.setAttribute('y', String(startY + i * lineHeight));
       tspan.textContent = line;
       textEl.appendChild(tspan);
