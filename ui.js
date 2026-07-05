@@ -29,6 +29,18 @@ const zoomLabel = document.getElementById('zoomLabel');
 const editorLabel = document.getElementById('editorLabel');
 const mmdDrawer = document.getElementById('mmdDrawer');
 const mmdOutput = document.getElementById('mmdOutput');
+const warningBanner = document.getElementById('warningBanner');
+const warningBannerText = document.getElementById('warningBannerText');
+
+function setWarning(msg){
+  if(!warningBanner) return;
+  if(msg){
+    warningBannerText.textContent = msg;
+    warningBanner.classList.add('show');
+  } else {
+    warningBanner.classList.remove('show');
+  }
+}
 
 /* ---------------------------------------------------------------
    AUTOSAVE (localStorage) — keeps whatever's in the editor safe
@@ -114,7 +126,12 @@ const debouncedColorRender = debounce(()=>{
 
 const debouncedAutosave = debounce(saveAutosave, 400);
 codeEl.addEventListener('input', debouncedAutosave);
-dirEl.addEventListener('change', saveAutosave);
+// `change` events on a <select> already fire at most once per user action
+// (not on every keystroke like `input`), so debouncing isn't needed for
+// throttling — but routing it through the same debounced function keeps
+// the two autosave triggers consistent and avoids a redundant immediate
+// write landing right before/after a debounced one from the editor.
+dirEl.addEventListener('change', debouncedAutosave);
 
 colorPopover.querySelectorAll('input[type="color"]').forEach(input=>{
   input.addEventListener('input', ()=>{
@@ -361,14 +378,22 @@ async function render(){
     host.innerHTML = '<div class="center-wrap"><div class="empty-hint">เขียนโค้ดทางซ้าย แล้วกด "แปลงเป็นภาพ" เพื่อดูโฟลว์ชาร์ต</div></div>';
     setStatus(true, 'พร้อมใช้งาน');
     lastGeneratedMermaid = null;
+    setWarning(null);
     return;
   }
 
   let mermaidSrc;
+  setWarning(null);
   if(modeEl.value === 'code'){
     try{
-      mermaidSrc = convertCodeToMermaid(raw);
+      // convertCodeToMermaid now returns { mermaid, warning } instead of a
+      // bare string — `warning` is set when the source has more than one
+      // function and only one of them could be converted, so the user
+      // isn't left wondering why the rest of their file is missing.
+      const result = convertCodeToMermaid(raw);
+      mermaidSrc = result.mermaid;
       lastGeneratedMermaid = mermaidSrc;
+      setWarning(result.warning);
     }catch(err){
       const msg = (err && err.message) ? err.message : String(err);
       host.innerHTML = `<div class="center-wrap"><div class="error-box"><b>แปลงซอร์สโค้ดไม่สำเร็จ</b>\n\n${msg}</div></div>`;
@@ -565,13 +590,6 @@ function convertForeignObjectsToSvgText(svgRoot){
   foreignObjects.forEach(fo=>{
     const width = parseFloat(fo.getAttribute('width')) || 0;
     const height = parseFloat(fo.getAttribute('height')) || 0;
-    // The foreignObject isn't anchored at (0,0) inside its parent <g> — Mermaid
-    // positions it with its own x/y offset (e.g. x="-40" y="-10") to center the
-    // label on the node. Without adding that offset back in, the replacement
-    // <text> renders at the group's origin instead of the label's real spot,
-    // which is what made text drift away from its shape in exported PNGs.
-    const offsetX = parseFloat(fo.getAttribute('x')) || 0;
-    const offsetY = parseFloat(fo.getAttribute('y')) || 0;
     const holder = fo.querySelector('span, p, div') || fo;
 
     let color = '#ccc';
@@ -597,39 +615,6 @@ function convertForeignObjectsToSvgText(svgRoot){
       if(lines.length === 0) lines = [''];
     }
 
-    // The lines above only account for EXPLICIT breaks. In the live foreignObject,
-    // long labels with no explicit break still wrap across multiple visual lines
-    // because the browser wraps text to fit the box's CSS width. Our plain <text>
-    // has no box to wrap against, so without doing this wrap ourselves a long
-    // label becomes one unbroken, center-anchored line that balloons out past its
-    // box on both sides and overlaps whatever node sits next to it.
-    let measureCtx;
-    try{
-      const canvas = document.createElement('canvas');
-      measureCtx = canvas.getContext('2d');
-      measureCtx.font = fontWeight + ' ' + fontSize + ' Inter, sans-serif';
-    }catch(e){ measureCtx = null; }
-
-    const maxLineWidth = Math.max(width - 12, 20); // small inner padding
-    function wrapLine(line){
-      if(!measureCtx || measureCtx.measureText(line).width <= maxLineWidth) return [line];
-      const words = line.split(' ');
-      const wrapped = [];
-      let current = '';
-      words.forEach(word=>{
-        const candidate = current ? current + ' ' + word : word;
-        if(measureCtx.measureText(candidate).width <= maxLineWidth || !current){
-          current = candidate;
-        } else {
-          wrapped.push(current);
-          current = word;
-        }
-      });
-      if(current) wrapped.push(current);
-      return wrapped;
-    }
-    lines = lines.flatMap(wrapLine);
-
     const textEl = document.createElementNS(SVG_NS, 'text');
     textEl.setAttribute('text-anchor', 'middle');
     textEl.setAttribute('fill', color);
@@ -637,11 +622,11 @@ function convertForeignObjectsToSvgText(svgRoot){
 
     const lineHeight = Math.min(height / Math.max(lines.length, 1), 22) || 16;
     const totalH = lineHeight * lines.length;
-    const startY = offsetY + (height / 2) - (totalH / 2) + (lineHeight * 0.8);
+    const startY = (height / 2) - (totalH / 2) + (lineHeight * 0.8);
 
     lines.forEach((line, i)=>{
       const tspan = document.createElementNS(SVG_NS, 'tspan');
-      tspan.setAttribute('x', String(offsetX + width / 2));
+      tspan.setAttribute('x', String(width / 2));
       tspan.setAttribute('y', String(startY + i * lineHeight));
       tspan.textContent = line;
       textEl.appendChild(tspan);
@@ -699,7 +684,15 @@ document.getElementById('btnPNG').onclick = ()=>{
 
   img.onload = ()=>{
     try{
-      const scaleFactor = 2;
+      // Most browsers cap canvas dimensions around 16384px (some mobile
+      // browsers are lower still) and silently produce a blank/broken
+      // image past that — with 2x scaling, a diagram wider or taller than
+      // ~8192px would previously overflow that limit with no warning at
+      // all. Scale down (never up past 2x) so the output always fits.
+      const MAX_CANVAS_DIM = 16384;
+      // Note: no lower floor here on purpose — a diagram already wider or
+      // taller than MAX_CANVAS_DIM at 1x must shrink below 1x to fit at all.
+      const scaleFactor = Math.min(2, MAX_CANVAS_DIM / Math.max(w, h));
       const canvas = document.createElement('canvas');
       canvas.width = Math.max(1, Math.round(w * scaleFactor));
       canvas.height = Math.max(1, Math.round(h * scaleFactor));
