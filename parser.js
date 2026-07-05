@@ -1017,9 +1017,9 @@ function createParser(){
   // its own start...end node/edge chain, appending onto the shared
   // nodeDefs/edgeDefs arrays. Returns null if the body had nothing
   // convertible (e.g. an empty function), so callers can skip it.
-  function convertOneFunctionBody(bodyOrig, bodyMasked, bodyOffset, startLabel){
+  function convertOneFunctionBody(bodyOrig, bodyMasked, bodyOffset, startLabel, groupOpts){
     let stmts = parseStatements(bodyOrig, bodyMasked, bodyOffset);
-    stmts = postProcessStmts(stmts, { hideSystem: true, groupOutputs: true, groupDeclarations: true, groupArrayAssigns: true });
+    stmts = postProcessStmts(stmts, Object.assign({ hideSystem: true, groupOutputs: true }, groupOpts));
     if(!stmts.length) return null;
 
     const startId = newNode('start', startLabel);
@@ -1039,6 +1039,15 @@ function createParser(){
   function convertCodeToMermaid(src, options){
     options = options || {};
     const mode = options.mode === 'all' ? 'all' : 'main';
+    // Whether to collapse runs of consecutive variable declarations /
+    // same-array assignments into one box each (see groupConsecutiveDeclarations
+    // / groupConsecutiveArrayAssigns above). Both default to ON, but the UI
+    // exposes a single checkbox so the person can turn this off and get one
+    // box per statement instead, if they'd rather see every line.
+    const groupOpts = {
+      groupDeclarations: options.groupDeclarations !== false,
+      groupArrayAssigns: options.groupArrayAssigns !== false
+    };
 
     nodeCounter = 0; connectorCounter = 0; nodeDefs = []; edgeDefs = []; contextStack = [];
     const s = preprocessSource(src);
@@ -1060,7 +1069,7 @@ function createParser(){
         // stay globally unique because nodeCounter/connectorCounter are
         // NOT reset between functions (only once, above, for the whole run).
         nodeDefs = []; edgeDefs = [];
-        const ok = convertOneFunctionBody(fn.orig, fn.masked, fn.offset, 'เริ่มต้น: ' + fn.name);
+        const ok = convertOneFunctionBody(fn.orig, fn.masked, fn.offset, 'เริ่มต้น: ' + fn.name, groupOpts);
         if(!ok){ skippedEmpty.push(fn.name); return; }
         convertedCount++;
         const subgraphId = 'fn' + idx;
@@ -1085,7 +1094,7 @@ function createParser(){
     // mode === 'main' (default): convert only main() / the first function found.
     const body = extractMainBody(s, masked);
     let stmts = parseStatements(body.orig, body.masked, body.offset);
-    stmts = postProcessStmts(stmts, { hideSystem: true, groupOutputs: true, groupDeclarations: true, groupArrayAssigns: true });
+    stmts = postProcessStmts(stmts, Object.assign({ hideSystem: true, groupOutputs: true }, groupOpts));
 
     if(!stmts.length){
       const hint = body.offset != null

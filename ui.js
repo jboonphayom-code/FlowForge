@@ -23,6 +23,8 @@ const codeEl = document.getElementById('code');
 const dirEl = document.getElementById('direction');
 const modeEl = document.getElementById('modeSelect');
 const funcScopeEl = document.getElementById('funcScope');
+const groupToggleWrap = document.getElementById('groupToggleWrap');
+const groupStmtsEl = document.getElementById('groupStmts');
 const host = document.getElementById('diagramHost');
 const statusWrap = document.getElementById('status');
 const statusText = document.getElementById('statusText');
@@ -69,6 +71,7 @@ function saveAutosave(){
       mode: modeEl.value,
       direction: dirEl.value,
       funcScope: funcScopeEl.value,
+      groupStmts: groupStmtsEl.checked,
       savedAt: Date.now()
     }));
   }catch(e){ /* storage full/unavailable — autosave is best-effort */ }
@@ -354,6 +357,7 @@ modeEl.addEventListener('change', ()=>{
   document.getElementById('btnViewMmd').style.display = isCode ? 'inline-block' : 'none';
   document.getElementById('btnOpenFile').style.display = isCode ? 'inline-block' : 'none';
   funcScopeEl.style.display = isCode ? 'inline-block' : 'none';
+  groupToggleWrap.style.display = isCode ? 'inline-flex' : 'none';
   buildSamples();
   if(isCode && !codeEl.value.trim()){
     codeEl.value = CODE_SAMPLES["C++ คำนวณเกรด"];
@@ -365,6 +369,11 @@ modeEl.addEventListener('change', ()=>{
 });
 
 funcScopeEl.addEventListener('change', ()=>{
+  render();
+  saveAutosave();
+});
+
+groupStmtsEl.addEventListener('change', ()=>{
   render();
   saveAutosave();
 });
@@ -398,7 +407,11 @@ async function render(){
       // bare string — `warning` is set when the source has more than one
       // function and only one of them could be converted, so the user
       // isn't left wondering why the rest of their file is missing.
-      const result = convertCodeToMermaid(raw, { mode: funcScopeEl.value === 'all' ? 'all' : 'main' });
+      const result = convertCodeToMermaid(raw, {
+        mode: funcScopeEl.value === 'all' ? 'all' : 'main',
+        groupDeclarations: groupStmtsEl.checked,
+        groupArrayAssigns: groupStmtsEl.checked
+      });
       mermaidSrc = result.mermaid;
       lastGeneratedMermaid = mermaidSrc;
       setWarning(result.warning);
@@ -595,6 +608,15 @@ document.getElementById('btnSVG').onclick = ()=>{
 function convertForeignObjectsToSvgText(svgRoot){
   const SVG_NS = 'http://www.w3.org/2000/svg';
   const foreignObjects = Array.from(svgRoot.querySelectorAll('foreignObject'));
+  // One shared canvas for measuring text width in pixels — used below to
+  // re-wrap each line to the node's actual box width. <text>/<tspan> in SVG
+  // never wraps on its own, so without measuring+re-wrapping here, any line
+  // long enough to have soft-wrapped on screen (in particular, any line
+  // inside a grouped declaration/array-assignment node — see parser.js)
+  // would get drawn unbroken in the exported PNG and spill outside the box.
+  const measureCanvas = document.createElement('canvas');
+  const measureCtx = measureCanvas.getContext('2d');
+
   foreignObjects.forEach(fo=>{
     const width = parseFloat(fo.getAttribute('width')) || 0;
     const height = parseFloat(fo.getAttribute('height')) || 0;
@@ -623,16 +645,59 @@ function convertForeignObjectsToSvgText(svgRoot){
       }
     }catch(e){ /* ignore, fall back to defaults */ }
 
-    // Split into lines: prefer explicit <p>/<br> blocks, else treat as one line.
-    let lines = [];
+    // Split into logical lines first: prefer explicit <p>/<br> blocks, else treat as one line.
+    let rawLines = [];
     const ps = fo.querySelectorAll('p');
     if(ps.length > 1){
-      lines = Array.from(ps).map(p=>p.textContent.trim());
+      rawLines = Array.from(ps).map(p=>p.textContent.trim());
     } else {
       const raw = (fo.textContent || '').replace(/\u00a0/g,' ').trim();
-      lines = raw.split(/\n+/).map(s=>s.trim()).filter(Boolean);
-      if(lines.length === 0) lines = [''];
+      rawLines = raw.split(/\n+/).map(s=>s.trim()).filter(Boolean);
+      if(rawLines.length === 0) rawLines = [''];
     }
+
+    // Re-wrap each logical line to fit inside the node's actual width.
+    // First try breaking on spaces (works for code/English text); if a
+    // single "word" is still too wide on its own (long unbroken Thai text
+    // has no spaces at all), fall back to a hard character-by-character
+    // split so it still fits rather than overflowing the box.
+    measureCtx.font = `${fontWeight} ${fontSize} Inter, sans-serif`;
+    const maxTextWidth = Math.max(10, width - 12); // small side padding
+    const lines = [];
+    rawLines.forEach(line=>{
+      if(!line){ lines.push(''); return; }
+      if(measureCtx.measureText(line).width <= maxTextWidth){
+        lines.push(line);
+        return;
+      }
+      const words = line.split(' ');
+      let cur = '';
+      words.forEach(w=>{
+        const test = cur ? cur + ' ' + w : w;
+        if(measureCtx.measureText(test).width <= maxTextWidth){
+          cur = test;
+          return;
+        }
+        if(cur) lines.push(cur);
+        if(measureCtx.measureText(w).width <= maxTextWidth){
+          cur = w;
+          return;
+        }
+        // hard-split a single overly-long "word" character by character
+        let chunk = '';
+        for(const ch of w){
+          const test2 = chunk + ch;
+          if(measureCtx.measureText(test2).width > maxTextWidth && chunk){
+            lines.push(chunk);
+            chunk = ch;
+          } else {
+            chunk = test2;
+          }
+        }
+        cur = chunk;
+      });
+      if(cur) lines.push(cur);
+    });
 
     const textEl = document.createElementNS(SVG_NS, 'text');
     textEl.setAttribute('text-anchor', 'middle');
@@ -751,6 +816,7 @@ document.getElementById('fileInput').addEventListener('change', (e)=>{
     document.getElementById('btnViewMmd').style.display = 'inline-block';
     document.getElementById('btnOpenFile').style.display = 'inline-block';
     funcScopeEl.style.display = 'inline-block';
+    groupToggleWrap.style.display = 'inline-flex';
     buildSamples();
     codeEl.value = String(reader.result || '');
     render();
@@ -780,6 +846,7 @@ document.getElementById('btnUseMmd').onclick = ()=>{
   editorLabel.textContent = 'โค้ด Mermaid';
   document.getElementById('btnViewMmd').style.display = 'none';
   funcScopeEl.style.display = 'none';
+  groupToggleWrap.style.display = 'none';
   codeEl.value = lastGeneratedMermaid;
   buildSamples();
   mmdDrawer.classList.remove('open');
@@ -796,17 +863,20 @@ if(restored){
   modeEl.value = restored.mode === 'code' ? 'code' : 'mermaid';
   dirEl.value = restored.direction || dirEl.value;
   funcScopeEl.value = restored.funcScope === 'all' ? 'all' : 'main';
+  groupStmtsEl.checked = restored.groupStmts !== false; // default ON for old autosaves without this field
   const isCode = modeEl.value === 'code';
   editorLabel.textContent = isCode ? 'ซอร์สโค้ด (C / C++ / Java / JavaScript)' : 'โค้ด Mermaid';
   document.getElementById('btnViewMmd').style.display = isCode ? 'inline-block' : 'none';
   document.getElementById('btnOpenFile').style.display = isCode ? 'inline-block' : 'none';
   funcScopeEl.style.display = isCode ? 'inline-block' : 'none';
+  groupToggleWrap.style.display = isCode ? 'inline-flex' : 'none';
   buildSamples();
   codeEl.value = restored.code;
 } else {
   document.getElementById('btnViewMmd').style.display = 'none';
   document.getElementById('btnOpenFile').style.display = 'none';
   funcScopeEl.style.display = 'none';
+  groupToggleWrap.style.display = 'none';
   buildSamples();
   codeEl.value = MERMAID_DEFAULT;
 }
