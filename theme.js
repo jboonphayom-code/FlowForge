@@ -89,10 +89,24 @@ function maskQuotedForShapeScan(src){
   return src.replace(/"(?:[^"\\]|\\.)*"/g, m => '"' + '_'.repeat(Math.max(0, m.length - 2)) + '"');
 }
 
+// Blanks out `subgraph ...` header lines before shape-scanning. A subgraph
+// header like `subgraph fn0["ฟังก์ชัน: main"]` or `subgraph uCol0[" "]`
+// uses the exact same `id[...]` bracket syntax as a real "process" node
+// definition — without this, the scan below would misdetect the subgraph
+// itself as a process-shaped node and paint the whole subgraph box solid
+// green (its class assignment lands after, and wins over, any `style`
+// rule already set on that id, e.g. the transparent styling used for
+// layout-only wrapper subgraphs).
+function stripSubgraphHeadersForShapeScan(src){
+  return src.split('\n')
+    .map(line => /^\s*subgraph\b/i.test(line) ? '' : line)
+    .join('\n');
+}
+
 function applyShapeColors(src){
   if(!/^\s*(flowchart|graph)\b/i.test(src)) return src;
 
-  const scan = maskQuotedForShapeScan(src);
+  const scan = stripSubgraphHeadersForShapeScan(maskQuotedForShapeScan(src));
   const used = new Set();
   const groups = { startEnd:[], process:[], input:[], display:[], decision:[], connector:[],
                     preparation:[], subroutine:[], document:[], database:[] };
