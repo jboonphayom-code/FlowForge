@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="th" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<title>โค้ด → โฟลว์ชาร์ต</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/11.12.0/mermaid.min.js"></script>
+<style>
+  :root{
+    --bg: #0b1220;
+    --panel: #111a2e;
+    --panel-2: #0e1626;
+    --line: #24314d;
+    --text: #e7ecf6;
+    --dim: #8b98b8;
+    --accent: #5fa8ff;
+    --accent-2: #ffb454;
+    --good: #4ade80;
+    --bad: #f87171;
+    --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    --sans: "Inter", -apple-system, "Segoe UI", sans-serif;
+    --grid-dot: #1a2540;
+  }
+  html[data-theme="light"]{
+    --bg: #f3f5fa;
+    --panel: #ffffff;
+    --panel-2: #eef1f7;
+    --line: #d8deea;
+    --text: #101828;
+    --dim: #64708a;
+    --accent: #2563eb;
+    --accent-2: #d97706;
+    --good: #16a34a;
+    --bad: #dc2626;
+    --grid-dot: #d8deea;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);}
+  .app{display:flex;flex-direction:column;height:100vh;}
+
+  /* top bar */
+  .topbar{
+    display:flex;align-items:center;gap:8px;padding:10px 16px;flex-wrap:wrap;
+    background:var(--panel-2);border-bottom:1px solid var(--line);
+  }
+  .brand{font-weight:700;font-size:14px;letter-spacing:.3px;display:flex;align-items:center;gap:8px;margin-right:4px;}
+  .brand .dot{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 8px var(--accent);}
+  .topbar .spacer{flex:1;}
+  .divider{width:1px;height:22px;background:var(--line);margin:0 4px;}
+  select, .btn{
+    background:var(--panel);color:var(--text);border:1px solid var(--line);
+    border-radius:8px;padding:7px 12px;font-size:13px;cursor:pointer;font-family:var(--sans);
+  }
+  .btn:hover{border-color:var(--accent);color:var(--accent);}
+  .btn.primary{background:var(--accent);color:#081020;border-color:var(--accent);font-weight:600;}
+  .btn.primary:hover{filter:brightness(1.08);color:#081020;}
+  .btn.active{border-color:var(--accent-2);color:var(--accent-2);}
+  .btn:disabled{opacity:.4;cursor:not-allowed;}
+  html,body,.topbar,.pane,.editor-pane,.preview-pane,#diagramHost,.zoom-controls,.mmd-drawer{transition:background-color .18s ease, color .18s ease, border-color .18s ease;}
+  #themeToggle{display:flex;align-items:center;justify-content:center;width:34px;height:34px;padding:0;}
+  #themeToggle svg{width:17px;height:17px;display:block;}
+
+  .color-picker-wrap{position:relative;}
+  .color-wheel-btn{
+    width:34px;height:34px;padding:0;border-radius:50%;border:2px solid var(--panel);
+    background:conic-gradient(from 0deg, #ff5252, #ffca28, #66bb6a, #29b6f6, #7c4dff, #ec407a, #ff5252);
+    cursor:pointer;box-shadow:0 0 0 1px var(--line);
+  }
+  .color-wheel-btn:hover{box-shadow:0 0 0 1px var(--accent);}
+  .color-popover{
+    position:absolute;top:calc(100% + 8px);right:0;z-index:30;
+    background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:12px;width:236px;box-shadow:0 12px 28px rgba(0,0,0,.4);
+    display:none;
+  }
+  .color-popover.open{display:block;}
+  .color-popover .popover-label{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;font-weight:600;}
+  .shape-color-row{
+    display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12px;color:var(--text);
+  }
+  .shape-color-row svg{flex-shrink:0;color:var(--dim);}
+  .shape-color-row span{flex:1;line-height:1.3;}
+  .shape-color-row input[type="color"]{
+    width:26px;height:26px;padding:2px;flex-shrink:0;border-radius:6px;border:1px solid var(--line);
+    background:var(--panel-2);cursor:pointer;
+  }
+  .shape-color-row input[type="color"]::-webkit-color-swatch-wrapper{padding:0;}
+  .shape-color-row input[type="color"]::-webkit-color-swatch{border:none;border-radius:3px;}
+  .color-popover-footer{
+    display:flex;justify-content:flex-end;border-top:1px solid var(--line);
+    margin-top:6px;padding-top:8px;
+  }
+
+  /* main split */
+  .main{flex:1;display:flex;min-height:0;}
+  .pane{display:flex;flex-direction:column;min-width:0;}
+  .editor-pane{width:42%;min-width:320px;border-right:1px solid var(--line);background:var(--panel-2);}
+  .preview-pane{flex:1;position:relative;background:
+      radial-gradient(circle at 1px 1px, var(--grid-dot) 1px, transparent 1px) 0 0/22px 22px, var(--bg);}
+
+  .pane-head{
+    display:flex;align-items:center;justify-content:space-between;gap:8px;
+    padding:10px 14px;border-bottom:1px solid var(--line);font-size:12px;color:var(--dim);
+    text-transform:uppercase;letter-spacing:.6px;font-weight:600;
+  }
+  .pane-head .status{display:flex;align-items:center;gap:6px;font-size:11px;text-transform:none;letter-spacing:0;}
+  .pane-head .status .led{width:7px;height:7px;border-radius:50%;background:var(--good);}
+  .pane-head .status.err .led{background:var(--bad);}
+
+  textarea{
+    flex:1;resize:none;border:none;outline:none;background:transparent;color:var(--text);
+    font-family:var(--mono);font-size:13.5px;line-height:1.65;padding:16px;tab-size:2;
+  }
+  textarea::placeholder{color:#4a577a;}
+
+  .samples{
+    display:flex;flex-wrap:wrap;gap:6px;padding:10px 14px;border-top:1px solid var(--line);
+  }
+  .chip{
+    background:var(--panel);border:1px solid var(--line);color:var(--dim);
+    padding:5px 10px;border-radius:999px;font-size:11.5px;cursor:pointer;
+  }
+  .chip:hover{border-color:var(--accent-2);color:var(--accent-2);}
+
+  #diagramHost{
+    position:absolute;inset:0;overflow:hidden;
+  }
+  .center-wrap{
+    height:100%;width:100%;display:flex;align-items:center;justify-content:center;
+    box-sizing:border-box;
+  }
+  #diagramHost svg{max-width:none !important;}
+  .transform-wrap{display:inline-block;transform-origin:center center;will-change:transform;}
+  .transform-wrap svg{display:block;}
+
+  #diagramHost.hand-mode{cursor:grab;}
+  #diagramHost.hand-mode.panning{cursor:grabbing;user-select:none;}
+  #diagramHost.hand-mode.panning *{user-select:none;}
+
+  .zoom-controls button.active{background:var(--accent);color:#081020;}
+  .zoom-controls{
+    position:absolute;bottom:16px;right:16px;display:flex;gap:6px;
+    background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:6px;
+  }
+  .zoom-controls button{
+    width:30px;height:30px;border-radius:7px;border:none;background:transparent;color:var(--text);
+    font-size:15px;cursor:pointer;display:flex;align-items:center;justify-content:center;
+  }
+  .zoom-controls button:hover{background:var(--line);}
+
+  .error-box{
+    max-width:560px;background:#2a1414;border:1px solid #7f2d2d;color:#fca5a5;
+    border-radius:10px;padding:16px 18px;font-family:var(--mono);font-size:12.5px;white-space:pre-wrap;line-height:1.6;
+  }
+  .error-box b{color:#fecaca;font-family:var(--sans);}
+
+  .empty-hint{color:var(--dim);font-size:13px;text-align:center;max-width:300px;}
+
+  /* generated mermaid drawer */
+  .mmd-drawer{
+    position:absolute;left:0;right:0;bottom:0;max-height:45%;
+    background:var(--panel-2);border-top:1px solid var(--accent-2);
+    display:flex;flex-direction:column;transform:translateY(100%);transition:transform .18s ease-out;
+    box-shadow:0 -8px 24px rgba(0,0,0,.35);
+  }
+  .mmd-drawer.open{transform:translateY(0);}
+  .mmd-drawer-head{
+    display:flex;align-items:center;justify-content:space-between;padding:8px 14px;
+    border-bottom:1px solid var(--line);font-size:12px;color:var(--accent-2);font-weight:600;
+  }
+  .mmd-drawer-head .row{display:flex;gap:8px;align-items:center;}
+  .mmd-drawer pre{
+    margin:0;padding:14px 16px;overflow:auto;font-family:var(--mono);font-size:12.5px;
+    color:#cfe0ff;line-height:1.6;white-space:pre-wrap;
+  }
+  .mini-btn{
+    background:transparent;border:1px solid var(--line);color:var(--dim);border-radius:6px;
+    padding:3px 9px;font-size:11px;cursor:pointer;
+  }
+  .mini-btn:hover{color:var(--accent-2);border-color:var(--accent-2);}
+
+  ::-webkit-scrollbar{width:10px;height:10px;}
+  ::-webkit-scrollbar-thumb{background:var(--line);border-radius:6px;}
+  ::-webkit-scrollbar-track{background:transparent;}
+
+  @media (max-width: 800px){
+    .main{flex-direction:column;}
+    .editor-pane{width:100%;border-right:none;border-bottom:1px solid var(--line);height:46%;}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="topbar">
+    <div class="brand"><span class="dot"></span> โค้ด → โฟลว์ชาร์ต</div>
+    <div class="divider"></div>
+    <select id="modeSelect">
+      <option value="mermaid">โหมด: เขียน Mermaid โดยตรง</option>
+      <option value="code">โหมด: แปลงจากซอร์สโค้ด (C/C++/Java/JS)</option>
+    </select>
+    <select id="direction">
+      <option value="TD">บนลงล่าง (TD)</option>
+      <option value="LR">ซ้ายไปขวา (LR)</option>
+      <option value="BT">ล่างขึ้นบน (BT)</option>
+      <option value="RL">ขวาไปซ้าย (RL)</option>
+    </select>
+    <input type="file" id="fileInput" accept=".c,.cpp,.cc,.cxx,.h,.hpp,.java,.js" style="display:none;">
+    <button class="btn" id="btnOpenFile" title="เปิดไฟล์ .c / .cpp / .java / .js แล้วแปลงเป็นผังงานทันที">📂 เปิดไฟล์โค้ด</button>
+    <div class="spacer"></div>
+    <div class="color-picker-wrap" id="colorPickerWrap">
+      <button class="color-wheel-btn" id="colorWheelBtn" title="ปรับสีตามชนิดสัญลักษณ์"></button>
+      <div class="color-popover" id="colorPopover">
+        <div class="popover-label">สีตามชนิดสัญลักษณ์</div>
+
+        <label class="shape-color-row">
+          <svg viewBox="0 0 32 18" width="30" height="16"><rect x="1" y="1" width="30" height="16" rx="8" ry="8" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+          <span>เริ่มต้น/สิ้นสุด</span>
+          <input type="color" id="clrStartEnd" value="#ffb84d" data-key="startEnd">
+        </label>
+
+        <label class="shape-color-row">
+          <svg viewBox="0 0 32 18" width="30" height="16"><line x1="2" y1="9" x2="30" y2="9" stroke="currentColor" stroke-width="2"/><polygon points="30,9 23,5 23,13" fill="currentColor"/></svg>
+          <span>ลูกศรแสดงทิศทาง</span>
+          <input type="color" id="clrArrow" value="#5fa8ff" data-key="arrow">
+        </label>
+
+        <label class="shape-color-row">
+          <svg viewBox="0 0 32 18" width="30" height="16"><rect x="1" y="1" width="30" height="16" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+          <span>ปฏิบัติงาน</span>
+          <input type="color" id="clrProcess" value="#22c55e" data-key="process">
+        </label>
+
+        <label class="shape-color-row">
+          <svg viewBox="0 0 32 18" width="30" height="16"><path d="M1,6 L8,1 L31,1 L31,17 L1,17 Z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+          <span>รับข้อมูล (Manual Input)</span>
+          <input type="color" id="clrInput" value="#f2a9e0" data-key="input">
+        </label>
+
+        <label class="shape-color-row">
+          <svg viewBox="0 0 32 18" width="30" height="16"><polygon points="8,1 24,1 31,9 24,17 8,17 1,9" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+          <span>เตรียมการ (Preparation)</span>
+          <input type="color" id="clrPreparation" value="#facc15" data-key="preparation">
+        </label>
+
+        <label class="shape-color-row">
+          <svg viewBox="0 0 32 18" width="30" height="16"><rect x="1" y="1" width="30" height="16" fill="none" stroke="currentColor" stroke-width="2"/><line x1="5" y1="1" x2="5" y2="17" stroke="currentColor" stroke-width="2"/><line x1="27" y1="1" x2="27" y2="17" stroke="currentColor" stroke-width="2"/></svg>
+          <span>เรียกใช้ฟังก์ชันย่อย (Subroutine)</span>
+          <input type="color" id="clrSubroutine" value="#38bdf8" data-key="subroutine">
+        </label>
+
+        <label class="shape-color-row">
+          <svg viewBox="0 0 32 18" width="30" height="16"><path d="M1,1 H31 V13 Q23,20 16,13 Q9,6 1,13 Z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+          <span>เอกสาร (Document)</span>
+          <input type="color" id="clrDocument" value="#c084fc" data-key="document">
+        </label>
+
+        <label class="shape-color-row">
+          <svg viewBox="0 0 32 18" width="30" height="16"><path d="M1,4 A15,3 0 0 0 31,4 V14 A15,3 0 0 1 1,14 Z" fill="none" stroke="currentColor" stroke-width="2"/><ellipse cx="16" cy="4" rx="15" ry="3" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+          <span>ฐานข้อมูล (Database)</span>
+          <input type="color" id="clrDatabase" value="#fb7185" data-key="database">
+        </label>
+
+        <label class="shape-color-row">
+          <svg viewBox="0 0 32 18" width="30" height="16"><path d="M1,1 H24 Q31,1 31,9 Q31,17 24,17 H1 Z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+          <span>แสดงผลทางจอภาพ (Display)</span>
+          <input type="color" id="clrDisplay" value="#29abe2" data-key="display">
+        </label>
+
+        <label class="shape-color-row">
+          <svg viewBox="0 0 32 18" width="30" height="16"><polygon points="16,1 31,9 16,17 1,9" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+          <span>การตัดสินใจ</span>
+          <input type="color" id="clrDecision" value="#8b5cf6" data-key="decision">
+        </label>
+
+        <label class="shape-color-row">
+          <svg viewBox="0 0 32 18" width="30" height="16"><circle cx="16" cy="9" r="8" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+          <span>จุดเชื่อมต่อของผังงาน</span>
+          <input type="color" id="clrConnector" value="#e53935" data-key="connector">
+        </label>
+
+        <div class="color-popover-footer">
+          <button class="mini-btn" id="resetShapeColors">รีเซ็ตค่าเริ่มต้น</button>
+        </div>
+      </div>
+    </div>
+    <button class="btn" id="themeToggle" title="สลับเป็นโหมดกลางวัน"></button>
+    <button class="btn" id="btnViewMmd">{ } ดูโค้ด Mermaid</button>
+    <button class="btn" id="btnSVG">ดาวน์โหลด SVG</button>
+    <button class="btn" id="btnPNG">ดาวน์โหลด PNG</button>
+    <button class="btn primary" id="btnRender">▶ แปลงเป็นภาพ</button>
+  </div>
+
+  <div class="main">
+    <div class="pane editor-pane">
+      <div class="pane-head">
+        <span id="editorLabel">โค้ด Mermaid</span>
+        <span class="status" id="status"><span class="led"></span><span id="statusText">พร้อมใช้งาน</span></span>
+      </div>
+      <textarea id="code" spellcheck="false"></textarea>
+      <div class="samples" id="samples"></div>
+    </div>
+
+    <div class="pane preview-pane">
+      <div class="pane-head">
+        <span>ตัวอย่างภาพ</span>
+        <span id="zoomLabel" style="text-transform:none;letter-spacing:0;">100%</span>
+      </div>
+      <div id="diagramHost">
+        <div class="center-wrap"><div class="empty-hint">เขียนโค้ดทางซ้าย แล้วกด "แปลงเป็นภาพ" เพื่อดูโฟลว์ชาร์ต</div></div>
+      </div>
+      <div class="zoom-controls">
+        <button id="handTool" title="เครื่องมือมือ (ลากเพื่อเลื่อนภาพ)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M8 12.5V6a1.5 1.5 0 0 1 3 0v5"/>
+            <path d="M11 11V4.5a1.5 1.5 0 0 1 3 0V11"/>
+            <path d="M14 11.2V5.5a1.5 1.5 0 0 1 3 0V12"/>
+            <path d="M17 12v-2a1.5 1.5 0 0 1 3 0v6c0 3.3-2.7 6-6 6h-2.5c-1.9 0-3.4-.8-4.5-2.1L4.2 15.8c-.7-.8-.6-1.9.1-2.5.7-.6 1.7-.5 2.4.1L8 14.8"/>
+          </svg>
+        </button>
+        <button id="zoomOut" title="ซูมออก">−</button>
+        <button id="zoomReset" title="รีเซ็ตซูม">⤢</button>
+        <button id="zoomIn" title="ซูมเข้า">+</button>
+      </div>
+      <div class="mmd-drawer" id="mmdDrawer">
+        <div class="mmd-drawer-head">
+          <span>โค้ด Mermaid ที่แปลงได้อัตโนมัติ</span>
+          <div class="row">
+            <button class="mini-btn" id="btnCopyMmd">คัดลอก</button>
+            <button class="mini-btn" id="btnUseMmd">แก้ไขต่อในโหมด Mermaid</button>
+            <button class="mini-btn" id="btnCloseMmd">ปิด ✕</button>
+          </div>
+        </div>
+        <pre id="mmdOutput"></pre>
+      </div>
+    </div>
+  </div>
+</div>
+<script type="module" src="ui.js"></script>
+</body>
+</html>
